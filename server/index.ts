@@ -1,34 +1,16 @@
 import express from "express";
 import cors from "cors";
 import { fromSSO } from "@aws-sdk/credential-providers";
-import {
-  BedrockRuntimeClient,
-  InvokeModelCommand,
-} from "@aws-sdk/client-bedrock-runtime";
 import { extractStylesFromUrl, closeBrowser } from "./agents/style-extractor.js";
 import { analyzeContent } from "./agents/content-analyst.js";
 import { designColorScheme } from "./agents/color-architect.js";
 import { designFramePrompts } from "./agents/cinematic-director.js";
 import { designPagePlan } from "./agents/page-architect.js";
+import { generateImage, getImageProviderName, IMAGE_PROVIDER } from "./agents/image-generator.js";
 import { invokeClaudeRaw, REGION, PROFILE } from "./llm.js";
 
 const IMAGE_REGION = process.env.VITE_BEDROCK_IMAGE_REGION || REGION;
-const CLAUDE_MODEL_ID =
-  process.env.VITE_BEDROCK_MODEL_ID || "us.anthropic.claude-sonnet-4-v1-0";
-const IMAGE_MODEL_ID =
-  process.env.VITE_BEDROCK_IMAGE_MODEL_ID || "stability.sd3-5-large-v1:0";
-
 const ssoCredentials = fromSSO({ profile: PROFILE });
-
-const claudeClient = new BedrockRuntimeClient({
-  region: REGION,
-  credentials: ssoCredentials,
-});
-
-const imageClient = new BedrockRuntimeClient({
-  region: IMAGE_REGION,
-  credentials: ssoCredentials,
-});
 
 const app = express();
 app.use(cors());
@@ -145,90 +127,33 @@ app.post("/api/design-page", async (req, res) => {
   }
 });
 
-// ─── Image Generation ───────────────────────────────────────────
+// ─── Agent: Image Generator (Vertex AI or Bedrock) ─────────────
 app.post("/api/generate-image", async (req, res) => {
   try {
     const { prompt, seed } = req.body;
-    const requestBody = buildImageRequestBody(prompt, seed);
-
-    const command = new InvokeModelCommand({
-      modelId: IMAGE_MODEL_ID,
-      contentType: "application/json",
-      accept: "application/json",
-      body: requestBody,
-    });
-
-    const response = await imageClient.send(command);
-    const imageDataUrl = parseImageResponse(response.body);
-    res.json({ imageUrl: imageDataUrl });
+    const result = await generateImage(prompt, seed, ssoCredentials, IMAGE_REGION);
+    res.json({ imageUrl: result.imageUrl });
   } catch (error: any) {
     console.error("Image error:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ─── Image Model Helpers ────────────────────────────────────────
-
-function buildImageRequestBody(prompt: string, seed: number): string {
-  if (IMAGE_MODEL_ID.startsWith("amazon.nova-canvas")) {
-    return JSON.stringify({
-      taskType: "TEXT_IMAGE",
-      textToImageParams: { text: prompt },
-      imageGenerationConfig: { numberOfImages: 1, width: 1280, height: 720, seed: seed % 858993459, quality: "standard" },
-    });
-  }
-  if (IMAGE_MODEL_ID.startsWith("amazon.titan-image")) {
-    return JSON.stringify({
-      taskType: "TEXT_IMAGE",
-      textToImageParams: { text: prompt },
-      imageGenerationConfig: { numberOfImages: 1, width: 1280, height: 720, seed, quality: "standard" },
-    });
-  }
-  if (IMAGE_MODEL_ID.includes("sd3")) {
-    return JSON.stringify({
-      prompt, seed: seed % 4294967295, mode: "text-to-image", output_format: "png", aspect_ratio: "16:9",
-    });
-  }
-  if (IMAGE_MODEL_ID.startsWith("stability.")) {
-    return JSON.stringify({
-      text_prompts: [{ text: prompt, weight: 1 }], cfg_scale: 7, seed: seed % 4294967295, steps: 30, width: 1280, height: 720,
-    });
-  }
-  throw new Error(`Unsupported image model: ${IMAGE_MODEL_ID}`);
-}
-
-function parseImageResponse(responseBody: Uint8Array): string {
-  const parsed = JSON.parse(new TextDecoder().decode(responseBody));
-  if (IMAGE_MODEL_ID.startsWith("amazon.nova-canvas") || IMAGE_MODEL_ID.startsWith("amazon.titan-image")) {
-    const b64 = parsed.images?.[0];
-    if (!b64) throw new Error("No image in response");
-    return `data:image/png;base64,${b64}`;
-  }
-  if (IMAGE_MODEL_ID.includes("sd3")) {
-    const b64 = parsed.images?.[0];
-    if (!b64) throw new Error("No image in response");
-    return `data:image/png;base64,${b64}`;
-  }
-  if (IMAGE_MODEL_ID.startsWith("stability.")) {
-    const b64 = parsed.artifacts?.[0]?.base64;
-    if (!b64) throw new Error("No image in response");
-    return `data:image/png;base64,${b64}`;
-  }
-  throw new Error(`Unknown model: ${IMAGE_MODEL_ID}`);
-}
-
 // ─── Startup ────────────────────────────────────────────────────
+const CLAUDE_MODEL_ID = process.env.VITE_BEDROCK_MODEL_ID || "us.anthropic.claude-sonnet-4-v1-0";
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`\n🔧 EverForge 3D Server running on http://localhost:${PORT}`);
   console.log(`   Claude: ${CLAUDE_MODEL_ID} (${REGION})`);
-  console.log(`   Image:  ${IMAGE_MODEL_ID} (${IMAGE_REGION})`);
+  console.log(`   Image:  ${getImageProviderName()}`);
   console.log(`\n   Agents:`);
-  console.log(`   ├─ Style Extractor  (Playwright → DOM analysis)`);
-  console.log(`   ├─ Content Analyst  (Claude → brand/audience strategy)`);
-  console.log(`   ├─ Color Architect  (Claude → palette design)`);
+  console.log(`   ├─ Style Extractor    (Playwright → DOM analysis)`);
+  console.log(`   ├─ Content Analyst    (Claude → brand/audience strategy)`);
+  console.log(`   ├─ Color Architect    (Claude → palette design)`);
   console.log(`   ├─ Cinematic Director (Claude → camera angles)`);
-  console.log(`   └─ Page Architect   (Claude → section layout + copy)\n`);
+  console.log(`   ├─ Page Architect     (Claude → section layout + copy)`);
+  console.log(`   └─ Image Generator    (${IMAGE_PROVIDER === "vertex-nano-banana" ? "Vertex AI → Nano Banana Pro" : "Bedrock → " + (process.env.VITE_BEDROCK_IMAGE_MODEL_ID || "SD 3.5")})\n`);
 });
 
 // Graceful shutdown
