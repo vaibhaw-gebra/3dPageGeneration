@@ -4,9 +4,11 @@ import { Navbar } from "./components/ui/Navbar";
 import { ChatPanel } from "./components/ui/ChatPanel";
 import { PipelineView } from "./components/ui/PipelineView";
 import { ResizeHandle } from "./components/ui/ResizeHandle";
+import { PagesDashboard } from "./components/ui/PagesDashboard";
 import { runPipeline, approvePipelineStage, regenerateLayout } from "./pipeline/frame-generator";
 import { generateStandaloneHTML } from "./export/html-export";
-import type { PipelineState, FrameManifest, PagePlan } from "./types";
+import { pageStore } from "./store/pageStore";
+import type { PipelineState, FrameManifest, PagePlan, SavedPage } from "./types";
 import type { AspectRatio } from "./components/ui/Navbar";
 import type { ChatMessage } from "./components/ui/ChatPanel";
 
@@ -16,7 +18,7 @@ function nextMsgId(): string {
   return `msg-${messageIdCounter}`;
 }
 
-type AppView = "landing" | "builder";
+type AppView = "landing" | "pages" | "builder";
 type BuilderPhase = "initial" | "active";
 
 export default function App() {
@@ -33,8 +35,8 @@ export default function App() {
   } | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>("16:9");
-  // Chat panel width as percentage (20-80%)
   const [chatWidthPct, setChatWidthPct] = useState(30);
+  const [currentPageId, setCurrentPageId] = useState<string | null>(null);
   const lastSystemMsgRef = useRef<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -48,7 +50,8 @@ export default function App() {
   }, []);
 
   const handleSend = useCallback(
-    async (prompt: string, image?: File, imageBase64?: string, referenceUrl?: string) => {
+    async (prompt: string, image?: File, imageBase64?: string, referenceUrl?: string, frameCount?: number) => {
+      const frames = frameCount || 8;
       if (builderPhase === "initial") {
         setBuilderPhase("active");
       }
@@ -72,7 +75,6 @@ export default function App() {
       abortControllerRef.current = controller;
 
       try {
-        // If we already have frames, only regenerate the page layout (not frames)
         if (result) {
           addSystemMessage("Updating page layout with your changes (keeping existing frames)...");
 
@@ -86,18 +88,21 @@ export default function App() {
             controller.signal
           );
           setResult(updatedResult);
+          // Auto-save to page store if we have a current page
+          if (currentPageId) {
+            pageStore.updatePageResult(currentPageId, updatedResult);
+          }
           addSystemMessage(
             "Page updated! Check the preview on the right."
           );
         } else {
-          // First generation — full pipeline
           if (referenceUrl) {
             addSystemMessage(`Extracting design from ${referenceUrl}...`);
           }
           addSystemMessage("Starting generation pipeline...");
 
           const pipelineResult = await runPipeline(
-            { prompt, image, imageBase64, referenceUrl, frameCount: 8 },
+            { prompt, image, imageBase64, referenceUrl, frameCount: frames },
             (state) => {
               setPipelineState(state);
               if (state.message) addSystemMessage(state.message);
@@ -105,6 +110,10 @@ export default function App() {
             controller.signal
           );
           setResult(pipelineResult);
+          // Auto-save to page store if we have a current page
+          if (currentPageId) {
+            pageStore.updatePageResult(currentPageId, pipelineResult);
+          }
           addSystemMessage(
             "Your 3D website is ready! You can preview it on the right and export as HTML."
           );
@@ -123,7 +132,7 @@ export default function App() {
         abortControllerRef.current = null;
       }
     },
-    [addSystemMessage, builderPhase, result]
+    [addSystemMessage, builderPhase, result, currentPageId]
   );
 
   const handleStop = useCallback(() => {
@@ -149,7 +158,27 @@ export default function App() {
     setMessages([]);
     setBuilderPhase("initial");
     setChatWidthPct(30);
+    setCurrentPageId(null);
     lastSystemMsgRef.current = null;
+  }, []);
+
+  // Open a saved page in the builder
+  const handleOpenPage = useCallback((page: SavedPage) => {
+    if (page.status === "complete" && page.frameManifest && page.pagePlan) {
+      setResult({ frameManifest: page.frameManifest, pagePlan: page.pagePlan });
+      setPipelineState({ status: "complete", progress: 100, message: "Page loaded from saved pages." });
+      setBuilderPhase("active");
+      setCurrentPageId(page.id);
+      setMessages([
+        {
+          id: nextMsgId(),
+          role: "system",
+          text: `Loaded "${page.name}". You can refine the layout or export as HTML.`,
+          timestamp: new Date(),
+        },
+      ]);
+      setView("builder");
+    }
   }, []);
 
   const isWaitingApproval = pipelineState.status === "waiting-approval";
@@ -166,7 +195,21 @@ export default function App() {
   const showActions = pipelineState.status === "complete" && result !== null;
 
   if (view === "landing") {
-    return <LandingPage onEnterBuilder={() => setView("builder")} />;
+    return (
+      <LandingPage
+        onEnterBuilder={() => setView("builder")}
+        onEnterPages={() => setView("pages")}
+      />
+    );
+  }
+
+  if (view === "pages") {
+    return (
+      <PagesDashboard
+        onOpenPage={handleOpenPage}
+        onBack={() => setView("landing")}
+      />
+    );
   }
 
   return (
@@ -177,7 +220,14 @@ export default function App() {
         showActions={showActions}
         aspectRatio={aspectRatio}
         onAspectRatioChange={setAspectRatio}
-        onBack={() => setView("landing")}
+        onBack={() => {
+          handleReset();
+          setView("pages");
+        }}
+        onPages={() => {
+          handleReset();
+          setView("pages");
+        }}
       />
 
       <div className="flex flex-1 min-h-0">

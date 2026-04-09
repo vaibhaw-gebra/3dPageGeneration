@@ -21,11 +21,12 @@ const claudeClient = new BedrockRuntimeClient({
  */
 export async function invokeClaudeRaw(
   systemPrompt: string,
-  userMessage: string
+  userMessage: string,
+  maxTokens = 8192
 ): Promise<string> {
   const body = {
     anthropic_version: "bedrock-2023-05-31",
-    max_tokens: 4096,
+    max_tokens: maxTokens,
     system: systemPrompt,
     messages: [{ role: "user", content: userMessage }],
   };

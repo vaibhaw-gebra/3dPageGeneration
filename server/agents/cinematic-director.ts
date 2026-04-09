@@ -12,9 +12,12 @@ export interface FramePrompt {
 }
 
 /**
- * Cinematic Director Agent — designs camera angles and writes detailed
- * image generation prompts that match the color palette and content tone.
- * Ensures visual VARIETY — no two frames should look the same.
+ * Cinematic Director Agent — designs a coherent sequence of camera angles
+ * for a SINGLE continuous scene. Every frame shares the same scene description
+ * but varies ONLY the camera angle, zoom, and lighting direction.
+ *
+ * This ensures all generated images look like they belong to the same world
+ * and create a smooth scroll transition.
  */
 export async function designFramePrompts(
   userPrompt: string,
@@ -24,50 +27,105 @@ export async function designFramePrompts(
   imageBase64?: string
 ): Promise<FramePrompt[]> {
   const toneHint = contentAnalysis
-    ? `\nContent tone: ${contentAnalysis.contentTone}. Target audience: ${contentAnalysis.targetAudience}.`
+    ? `\nBrand: ${contentAnalysis.brandName || ""}. Tone: ${contentAnalysis.contentTone}. Audience: ${contentAnalysis.targetAudience}.`
     : "";
 
-  const systemPrompt = `You are a cinematic director designing ${frameCount} camera angles for a 3D scroll-driven website.
+  // Only include color hints if they came from actual extraction (not defaults)
+  const hasRealColors = colorScheme.mood && colorScheme.mood !== "cinematic dark";
+  const colorHint = hasRealColors
+    ? `\nSCENE MOOD HINT (use as subtle guidance, NOT as a color filter):
+- Overall mood: "${colorScheme.mood}" (${colorScheme.warmth} tones)
+- Let the scene's natural colors dominate. Do NOT tint the entire image with one color.`
+    : "";
 
-COLOR PALETTE TO MATCH (this is critical — images must reflect these colors):
-- Primary: ${colorScheme.primary}
-- Accent: ${colorScheme.accent}
-- Background mood: ${colorScheme.mood}
-- Warmth: ${colorScheme.warmth}${toneHint}
+  const systemPrompt = `You are a cinematic director planning a single continuous camera move through ONE scene.
 
-RULES FOR VISUAL VARIETY:
-1. Each frame MUST have a distinctly different camera angle, zoom, and lighting
-2. Frame 1: Wide establishing shot — showcase the full scene
-3. Frame 2: Slight left rotation, dramatic side lighting
-4. Frame 3: Close-up detail shot — focus on a key element
-5. Frame 4: High angle looking down, atmospheric fog
-6. Frame 5: Low angle looking up, power shot
-7. Frame 6-8: Dynamic angles — dutch tilt, over-shoulder, macro detail, pull-back reveal
+YOUR JOB: Create ${frameCount} frames that show the EXACT SAME scene from a smoothly changing camera path.
+Think of it as a drone shot slowly orbiting and zooming around a single subject/environment.
+${colorHint}${toneHint}
 
-IMAGE PROMPT RULES:
-- ALWAYS specify the color temperature and palette in each prompt
-- Include "${colorScheme.warmth}" tones and "${colorScheme.mood}" mood
-- Specify exact lighting: "warm amber side light", "cool blue rim light", "golden hour glow"
-- Include material textures: "brushed metal", "frosted glass", "matte surface"
-- NEVER write "blue tones" or "blue lighting" unless the palette is actually blue
-- Each prompt should be 3-4 detailed sentences
+CRITICAL RULES FOR VISUAL CONTINUITY:
 
-Respond with ONLY a JSON array of ${frameCount} objects:
+1. SCENE ANCHOR — Write a 1-2 sentence "base scene" description that stays IDENTICAL in every prompt.
+   The scene description should faithfully represent what the user asked for with NATURAL, REALISTIC colors.
+   Example: "A sleek chrome robot standing in a dark studio with polished concrete floor, volumetric amber fog, and warm side lighting."
+
+2. CAMERA PATH — Each frame changes ONLY:
+   - Camera angle (orbit left → front → right → above → low → back to front)
+   - Zoom level (wide establishing → medium → close-up → medium → wide pullback)
+   - Subtle lighting shift (but same light sources)
+
+3. PROMPT STRUCTURE — Every prompt MUST follow this exact format:
+   "[SCENE ANCHOR]. Camera: [angle description]. [Lighting detail]. [Atmosphere detail]."
+
+   The scene anchor text must be WORD-FOR-WORD identical across all ${frameCount} prompts.
+   Only the camera/lighting/atmosphere sentences change.
+
+4. SMOOTH TRANSITIONS — Adjacent frames should have small angle changes (15-30 degrees), not jumps.
+   Frame sequence should create a smooth orbit: front → slight right → right → slight high → overhead → pull back.
+
+5. NEVER change the subject, environment, materials, or color palette between frames.
+   Frame 1 and Frame ${frameCount} should clearly be the same place.
+
+6. COLOR ACCURACY — Use colors that match the scene naturally. A forest should be green, an ocean blue,
+   a sunset orange/pink. Do NOT force any specific hex color or tint across all frames. Let the scene dictate its own palette.
+
+Respond with ONLY a JSON array:
 [{
   "index": 0,
-  "angle": "wide-establishing",
+  "angle": "front-center",
   "zoom": "wide",
-  "mood": "descriptive mood for this specific frame",
-  "prompt": "detailed 3-4 sentence image generation prompt with specific colors, lighting, and materials",
+  "mood": "establishing, atmospheric",
+  "prompt": "[exact scene anchor]. Camera positioned directly in front, centered, wide establishing shot. Soft natural lighting from the left. Subtle atmospheric haze.",
   "cameraPosition": {"x": 0, "y": 0, "z": 1}
 }]`;
 
   const userMessage = imageBase64
-    ? `Scene: ${userPrompt}\n\nA reference image is provided. Generate ${frameCount} varied camera angle prompts that reimagine this scene from different perspectives, matching the color palette above.`
-    : `Scene: ${userPrompt}\n\nGenerate ${frameCount} dramatically different camera angle prompts matching the color palette above.`;
+    ? `Scene concept: ${userPrompt}\n\nA reference image is provided. Create ${frameCount} camera positions that orbit around this exact scene. Keep every detail identical — only the camera moves.`
+    : `Scene concept: ${userPrompt}\n\nFirst, design the base scene in vivid detail (materials, lighting, environment). Then create ${frameCount} frames that smoothly orbit through it. The scene anchor text must be identical in every prompt.`;
 
-  const result = await invokeClaudeRaw(systemPrompt, userMessage);
-  const jsonMatch = result.match(/\[[\s\S]*\]/);
-  if (!jsonMatch) throw new Error("Frame prompt generation failed");
-  return JSON.parse(jsonMatch[0]);
+  // ~300 tokens per frame + overhead; ensure enough room for large frame counts
+  const estimatedTokens = Math.max(8192, frameCount * 350 + 1024);
+  const result = await invokeClaudeRaw(systemPrompt, userMessage, estimatedTokens);
+
+  let jsonMatch = result.match(/\[[\s\S]*\]/);
+
+  // If no complete array found, try to repair truncated JSON
+  if (!jsonMatch) {
+    const arrayStart = result.indexOf("[");
+    if (arrayStart !== -1) {
+      let partial = result.slice(arrayStart);
+      // Close any unclosed object and array
+      const openBraces = (partial.match(/{/g) || []).length;
+      const closeBraces = (partial.match(/}/g) || []).length;
+      for (let i = 0; i < openBraces - closeBraces; i++) partial += "}";
+      if (!partial.trimEnd().endsWith("]")) {
+        // Remove trailing comma if present, then close array
+        partial = partial.replace(/,\s*$/, "") + "]";
+      }
+      jsonMatch = partial.match(/\[[\s\S]*\]/);
+    }
+  }
+
+  if (!jsonMatch) throw new Error("Frame prompt generation failed — could not parse response as JSON array");
+
+  let frames: FramePrompt[];
+  try {
+    frames = JSON.parse(jsonMatch[0]) as FramePrompt[];
+  } catch {
+    throw new Error("Frame prompt generation failed — invalid JSON in response");
+  }
+
+  // Validate consistency — check that prompts share a common prefix
+  if (frames.length >= 2) {
+    const words0 = frames[0].prompt.split(" ").slice(0, 10).join(" ");
+    const words1 = frames[1].prompt.split(" ").slice(0, 10).join(" ");
+    if (words0 !== words1) {
+      console.warn("[CinematicDirector] Warning: frame prompts may not share a consistent scene anchor");
+      console.warn(`  Frame 0 start: "${words0}"`);
+      console.warn(`  Frame 1 start: "${words1}"`);
+    }
+  }
+
+  return frames;
 }

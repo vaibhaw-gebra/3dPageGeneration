@@ -118,7 +118,7 @@ export async function runPipeline(
     onStateChange({
       status: "generating-prompts",
       progress: 10,
-      message: "🎬 Cinematic Director: Designing camera angles...",
+      message: "🎬 Cinematic Director: Planning a single continuous camera orbit through your scene...",
     });
 
     checkAbort(signal);

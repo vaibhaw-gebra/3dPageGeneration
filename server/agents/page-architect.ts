@@ -89,10 +89,45 @@ Return ONLY JSON:
 
   const result = await invokeClaudeRaw(
     systemPrompt,
-    `Create a stunning website for: ${userPrompt}\n\nWrite REAL, specific, compelling content for every section.`
+    `Create a stunning website for: ${userPrompt}\n\nWrite REAL, specific, compelling content for every section.`,
+    8192
   );
 
-  const jsonMatch = result.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("Page plan generation failed");
-  return JSON.parse(jsonMatch[0]);
+  // Robust JSON extraction — handle truncated or malformed output
+  let jsonStr = result;
+
+  // Strip markdown code fences
+  jsonStr = jsonStr.replace(/```json\s*/g, "").replace(/```\s*/g, "");
+
+  // Find the outermost JSON object
+  const start = jsonStr.indexOf("{");
+  if (start === -1) throw new Error("Page plan generation failed — no JSON found");
+  jsonStr = jsonStr.slice(start);
+
+  // Try parsing as-is
+  try {
+    return JSON.parse(jsonStr);
+  } catch {
+    // Attempt to repair truncated JSON by closing open brackets
+    let repaired = jsonStr;
+    const opens = (repaired.match(/\[/g) || []).length;
+    const closes = (repaired.match(/\]/g) || []).length;
+    const openBraces = (repaired.match(/\{/g) || []).length;
+    const closeBraces = (repaired.match(/\}/g) || []).length;
+
+    // Remove trailing comma before closing
+    repaired = repaired.replace(/,\s*$/, "");
+
+    for (let i = 0; i < opens - closes; i++) repaired += "]";
+    for (let i = 0; i < openBraces - closeBraces; i++) repaired += "}";
+
+    try {
+      return JSON.parse(repaired);
+    } catch (e2) {
+      console.error("JSON repair failed. Raw response length:", result.length);
+      console.error("First 500 chars:", result.slice(0, 500));
+      console.error("Last 500 chars:", result.slice(-500));
+      throw new Error(`Page plan JSON parse failed: ${(e2 as Error).message}`);
+    }
+  }
 }

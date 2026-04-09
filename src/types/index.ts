@@ -149,3 +149,42 @@ export interface UserInput {
   extractedSite?: ExtractedSite;
   frameCount: number;
 }
+
+// ─── Saved Page (like everforge v2 page model) ─────────────────
+
+export type PageStatus =
+  | "draft"
+  | "generating"
+  | "wireframe-completed"
+  | "complete"
+  | "error";
+
+export interface SavedPage {
+  id: string;
+  name: string;
+  description: string;
+  status: PageStatus;
+  referenceUrl?: string;
+  additionalContext?: string;
+  frameCount: number;
+  prompt: string;
+  // Generated data
+  frameManifest?: FrameManifest;
+  pagePlan?: PagePlan;
+  // Brand & theme (extracted from reference URL)
+  brandAndTheme?: import("./brand").BrandAndTheme;
+  // Thumbnail (first frame data URI)
+  thumbnailUrl?: string;
+  // Timestamps
+  createdAt: string;
+  updatedAt: string;
+  generatedAt?: string;
+}
+
+export interface CreatePageFormData {
+  pageName: string;
+  goal: string;
+  referenceUrl?: string;
+  context?: string;
+  frameCount: number;
+}

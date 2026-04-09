@@ -12,7 +12,7 @@ interface ChatMessage {
 }
 
 interface ChatPanelProps {
-  onSend: (prompt: string, image?: File, imageBase64?: string, referenceUrl?: string) => void;
+  onSend: (prompt: string, image?: File, imageBase64?: string, referenceUrl?: string, frameCount?: number) => void;
   onStop: () => void;
   onApprove: () => void;
   isGenerating: boolean;
@@ -73,6 +73,8 @@ export function ChatPanel({
   const [input, setInput] = useState("");
   const [referenceUrl, setReferenceUrl] = useState("");
   const [showUrlInput, setShowUrlInput] = useState(false);
+  const [frameCount, setFrameCount] = useState(8);
+  const [showFrameControl, setShowFrameControl] = useState(false);
   const [attachedImage, setAttachedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -108,10 +110,11 @@ export function ChatPanel({
       if (!trimmed || isGenerating) return;
       const base64 = imagePreview?.split(",")[1];
       const url = referenceUrl.trim() || undefined;
-      onSend(trimmed, attachedImage || undefined, base64, url);
+      onSend(trimmed, attachedImage || undefined, base64, url, frameCount);
       setInput("");
       setReferenceUrl("");
       setShowUrlInput(false);
+      setShowFrameControl(false);
       clearImage();
     },
     [input, isGenerating, attachedImage, imagePreview, onSend, clearImage]
@@ -250,6 +253,20 @@ export function ChatPanel({
                     <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.86-1.556a4.5 4.5 0 00-1.242-7.244l-4.5-4.5a4.5 4.5 0 00-6.364 6.364L4.343 8.28" />
                   </svg>
                 </button>
+                {/* Frame count */}
+                <button
+                  type="button"
+                  onClick={() => setShowFrameControl(!showFrameControl)}
+                  className={`p-2 rounded-lg transition-colors relative ${showFrameControl ? "text-purple-400 bg-purple-500/10" : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"}`}
+                  title={`Frames: ${frameCount}`}
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h1.5C5.496 19.5 6 18.996 6 18.375m-2.625 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-1.5A1.125 1.125 0 0118 18.375M20.625 4.5H3.375m17.25 0c.621 0 1.125.504 1.125 1.125M20.625 4.5h-1.5C18.504 4.5 18 5.004 18 5.625m3.75 0v1.5c0 .621-.504 1.125-1.125 1.125M3.375 4.5c-.621 0-1.125.504-1.125 1.125M3.375 4.5h1.5C5.496 4.5 6 5.004 6 5.625m-3.75 0v1.5c0 .621.504 1.125 1.125 1.125m0 0h1.5m-1.5 0c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m1.5-3.75C5.496 8.25 6 7.746 6 7.125v-1.5M4.875 8.25C5.496 8.25 6 8.754 6 9.375v1.5m0-5.25v5.25m0-5.25C6 5.004 6.504 4.5 7.125 4.5h9.75c.621 0 1.125.504 1.125 1.125m1.125 2.625h1.5m-1.5 0A1.125 1.125 0 0118 7.125v-1.5m1.125 2.625c-.621 0-1.125.504-1.125 1.125v1.5m2.625-2.625c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125M18 12.375h-1.5m1.5 0c.621 0 1.125.504 1.125 1.125v1.5" />
+                  </svg>
+                  <span className="absolute -top-1 -right-1 text-[9px] font-bold bg-purple-600 text-white rounded-full w-4 h-4 flex items-center justify-center">
+                    {frameCount}
+                  </span>
+                </button>
                 <textarea
                   ref={(el) => {
                     if (el) { el.style.height = "0px"; el.style.height = Math.min(el.scrollHeight, 160) + "px"; }
@@ -278,6 +295,32 @@ export function ChatPanel({
                   </svg>
                 </button>
               </div>
+              {/* Frame count slider */}
+              {showFrameControl && (
+                <div className="flex items-center gap-3 mt-2 ml-2 mr-2 px-3 py-2 bg-zinc-800/50 rounded-lg">
+                  <svg className="w-4 h-4 text-purple-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h1.5C5.496 19.5 6 18.996 6 18.375m-2.625 0V5.625" />
+                  </svg>
+                  <span className="text-xs text-zinc-400 shrink-0">Frames:</span>
+                  <input
+                    type="range"
+                    min={4}
+                    max={144}
+                    step={1}
+                    value={frameCount}
+                    onChange={(e) => setFrameCount(Number(e.target.value))}
+                    className="flex-1 accent-purple-500 h-1"
+                  />
+                  <input
+                    type="number"
+                    min={4}
+                    max={144}
+                    value={frameCount}
+                    onChange={(e) => setFrameCount(Math.min(144, Math.max(4, Number(e.target.value) || 4)))}
+                    className="w-12 bg-zinc-900 text-white text-xs text-center rounded px-1 py-1 border border-zinc-700 outline-none focus:border-purple-500"
+                  />
+                </div>
+              )}
               {referenceUrl && !showUrlInput && (
                 <div className="flex items-center gap-1.5 mt-1.5 ml-2">
                   <svg className="w-3 h-3 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -430,6 +473,32 @@ export function ChatPanel({
         </div>
       )}
 
+      {/* Frame count slider (sidebar) */}
+      {showFrameControl && (
+        <div className="px-3 py-2 border-t border-zinc-800">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-zinc-500 uppercase tracking-wider shrink-0">Frames</span>
+            <input
+              type="range"
+              min={4}
+              max={144}
+              step={1}
+              value={frameCount}
+              onChange={(e) => setFrameCount(Number(e.target.value))}
+              className="flex-1 accent-purple-500 h-1"
+            />
+            <input
+              type="number"
+              min={4}
+              max={144}
+              value={frameCount}
+              onChange={(e) => setFrameCount(Math.min(144, Math.max(4, Number(e.target.value) || 4)))}
+              className="w-11 bg-zinc-800 text-white text-xs text-center rounded px-1 py-0.5 border border-zinc-700 outline-none focus:border-purple-500"
+            />
+          </div>
+        </div>
+      )}
+
       {/* Chat Input */}
       <form onSubmit={handleSubmit} className="p-3 border-t border-zinc-800 flex items-end gap-2">
         <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageSelect} className="hidden" />
@@ -454,6 +523,21 @@ export function ChatPanel({
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.86-1.556a4.5 4.5 0 00-1.242-7.244l-4.5-4.5a4.5 4.5 0 00-6.364 6.364L4.343 8.28" />
           </svg>
+        </button>
+        {/* Frame count (sidebar) */}
+        <button
+          type="button"
+          onClick={() => setShowFrameControl(!showFrameControl)}
+          disabled={isBusy}
+          className={`p-1.5 rounded-lg transition-colors relative disabled:opacity-40 ${showFrameControl ? "text-purple-400 bg-purple-500/10" : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"}`}
+          title={`Frames: ${frameCount}`}
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h1.5C5.496 19.5 6 18.996 6 18.375m-2.625 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-1.5A1.125 1.125 0 0118 18.375M20.625 4.5H3.375m17.25 0c.621 0 1.125.504 1.125 1.125M20.625 4.5h-1.5C18.504 4.5 18 5.004 18 5.625m3.75 0v1.5c0 .621-.504 1.125-1.125 1.125M3.375 4.5c-.621 0-1.125.504-1.125 1.125M3.375 4.5h1.5C5.496 4.5 6 5.004 6 5.625m-3.75 0v1.5c0 .621.504 1.125 1.125 1.125" />
+          </svg>
+          <span className="absolute -top-1.5 -right-1.5 text-[8px] font-bold bg-purple-600 text-white rounded-full min-w-[16px] h-4 flex items-center justify-center px-0.5">
+            {frameCount}
+          </span>
         </button>
         <div className="flex-1 relative">
           <textarea

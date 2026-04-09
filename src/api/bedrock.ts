@@ -1,6 +1,68 @@
-import type { FramePrompt, GeneratedFrame, PagePlan, ExtractedSite } from "../types";
+import type { FramePrompt, GeneratedFrame, PagePlan, ExtractedSite, FrameManifest } from "../types";
+import type { BrandAndTheme } from "../types/brand";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
+
+// ─── Brand & Theme Extraction (SSE) ────────────────────────────
+
+export interface BrandExtractionEvent {
+  event: "progress" | "complete" | "error" | "keepalive";
+  message?: string;
+  progress?: number;
+  step?: string;
+  data?: BrandAndTheme;
+}
+
+export async function streamExtractBrand(
+  url: string,
+  onProgress: (event: BrandExtractionEvent) => void,
+  signal?: AbortSignal
+): Promise<BrandAndTheme> {
+  const res = await fetch(`${API_BASE}/api/extract-brand`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+    signal,
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(`Brand extraction error: ${err.error}`);
+  }
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: BrandAndTheme | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      try {
+        const parsed = JSON.parse(line.slice(6)) as BrandExtractionEvent;
+        if (parsed.event === "complete" && parsed.data) {
+          finalResult = parsed.data;
+        }
+        if (parsed.event === "error") {
+          throw new Error(parsed.message || "Brand extraction failed");
+        }
+        onProgress(parsed);
+      } catch (e) {
+        if (e instanceof Error && e.message.includes("failed")) throw e;
+      }
+    }
+  }
+
+  if (!finalResult) throw new Error("Brand extraction stream ended without result");
+  return finalResult;
+}
 
 // ─── Agent: Style Extractor + Content Analyst + Color Architect ─
 
@@ -141,4 +203,74 @@ export async function generateAllFrames(
   }
 
   return frames.sort((a, b) => a.index - b.index);
+}
+
+// ─── SSE: Full Page Generation Stream (like everforge v2) ──────
+
+export interface SSEProgressEvent {
+  event: "progress" | "complete" | "error" | "keepalive";
+  message?: string;
+  progress?: number;
+  step?: string;
+  data?: { frameManifest: FrameManifest; pagePlan: PagePlan };
+}
+
+export async function streamGeneratePage(
+  params: {
+    prompt: string;
+    referenceUrl?: string;
+    frameCount: number;
+    imageBase64?: string;
+  },
+  onProgress: (event: SSEProgressEvent) => void,
+  signal?: AbortSignal
+): Promise<{ frameManifest: FrameManifest; pagePlan: PagePlan }> {
+  const res = await fetch(`${API_BASE}/api/generate-page`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+    signal,
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(`Generation error: ${err.error}`);
+  }
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: { frameManifest: FrameManifest; pagePlan: PagePlan } | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      try {
+        const parsed = JSON.parse(line.slice(6)) as SSEProgressEvent;
+        if (parsed.event === "complete" && parsed.data) {
+          finalResult = parsed.data;
+        }
+        if (parsed.event === "error") {
+          throw new Error(parsed.message || "Generation failed");
+        }
+        onProgress(parsed);
+      } catch (e) {
+        if (e instanceof Error && e.message !== "Generation failed") continue;
+        throw e;
+      }
+    }
+  }
+
+  if (!finalResult) {
+    throw new Error("Stream ended without result");
+  }
+
+  return finalResult;
 }
